@@ -49,7 +49,7 @@ For a U.S. merchant, the integration uses Stripe Checkout for cards and a separa
 - The server reads the price from D1; the browser cannot supply it. Stripe webhook signatures and PayPal webhook signatures are verified by the Worker. Provider payment state, order ID, amount, and currency are checked.
 - Unique provider event IDs and a guarded `pending` to `paid` transition make repeat payment notifications idempotent.
 - Receipt secrets are hashed in D1. A verified order gets a random 256-bit download token; only its hash and AES-GCM encrypted copy are stored. Receipt access can recover the token only for the matching receipt holder.
-- Every download checks paid status, revocation, expiry, the order limit, and private Supabase object availability server-side. The Worker streams the object from Supabase; the permanent storage URL and secret key are never returned to the browser. The atomic download count increments only when a valid private object is about to be served.
+- Every download checks paid status, revocation, expiry, the order limit, and private Supabase object availability server-side. Before reading object metadata or bytes, the Worker checks the bucket metadata and fails closed unless the configured bucket explicitly reports `public: false`. It streams the object from Supabase; the permanent storage URL and secret key are never returned to the browser. The atomic download count increments only when a valid private object is about to be served.
 - Expiry/count defaults are 86,400 seconds and three successful file responses. Each order records its own limit and expiry; change `download_ttl_seconds` or `download_limit` before creating new test orders to configure them.
 - Refund webhooks revoke access. The API rejects unpaid, invalid, revoked, expired, exhausted, and missing-file downloads with useful messages.
 - `backend/private-assets/TEST_ONLY_NOT_THE_FINISHED_GUIDE.pdf` is local-only and ignored by Git. It is prominently marked and must never be sold or sent as the final guide. No PDF has been uploaded. If a test upload is later approved, it must go only into the private Supabase test bucket.
@@ -73,12 +73,12 @@ Payment processing is not live. No API accounts, credentials, price, or Worker d
 The Worker adapter is prepared, but no Supabase project, bucket, URL, or secret key is connected. To prepare the free test storage in the Supabase dashboard:
 
 1. Sign in to Supabase and select an existing Free project or create one on the Free plan. Stop if the dashboard requests a payment method, paid plan, or billing approval.
-2. Open **Storage** and create a bucket named `puerto-plata-guide-private-test`. Set it to **Private**; never enable public access.
+2. Open **Storage** and create a bucket named `puerto-plata-guide-private-test`. Set it to **Private**; never enable public access. The Worker verifies this setting before each object metadata or download request and fails closed if it cannot confirm the bucket is private.
 3. In **Project Settings → API Keys**, obtain the project URL and a new `sb_secret_...` key for server-side use. Do not paste the key into ChatGPT, browser code, GitHub, or `wrangler.toml`.
 4. For local testing, put `SUPABASE_URL` and `SUPABASE_SECRET_KEY` into the ignored `backend/.dev.vars` file. The committed `.dev.vars.example` contains placeholders only. The bucket name is a non-secret Worker variable in `wrangler.toml`.
 5. For a later Cloudflare test deployment, add the URL as a Worker variable and the `sb_secret_...` value as a Worker secret through the Cloudflare dashboard. Do not deploy as part of initial setup.
 
-The Supabase secret key bypasses Storage access policies, so keep it only in a trusted Worker/local server environment. The Worker requests files through the private authenticated Storage endpoint and streams bytes to a buyer only after checking the D1 token, expiry, revocation, and download count. Do not give customers Supabase signed URLs; those URLs can be reused until expiry.
+The Supabase secret key bypasses Storage access policies, so keep it only in a trusted Worker/local server environment. The Worker requests files through the private authenticated Storage endpoint and streams bytes to a buyer only after checking the D1 token, expiry, revocation, and download count. It does not mint signed or public URLs. A Supabase dashboard owner could still change the bucket to public outside the Worker; the Worker will stop serving it on the next request, so leave the bucket private in the dashboard at all times.
 
 Cloudflare D1 test database `puerto-plata-guide-test` is already created and its ID is in `backend/wrangler.toml`. Its initial schema has **not** been applied remotely. Run the migration only after separately authorizing that step:
 
@@ -124,10 +124,11 @@ Use a separate test database and bucket for these checks. Do not log receipt/dow
 
 ### Local unit checks
 
-Node's built-in test runner covers amount conversion, Stripe signature and live-mode rejection, disabled checkout, private Supabase file access, missing files, the download limit, expired links, revoked access, and unsafe object paths:
+Node's built-in test runner covers amount conversion, Stripe signature and live-mode rejection, disabled checkout, private bucket verification and authenticated file access, missing files, the download limit, expired links, revoked access, and unsafe object paths:
 
 ```powershell
 npm test
 ```
 
 These checks do not replace the provider sandbox/webhook checklist.
+
