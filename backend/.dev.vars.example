@@ -11,3 +11,8 @@ PAYPAL_CLIENT_SECRET=REPLACE_WITH_SANDBOX_CLIENT_SECRET
 PAYPAL_WEBHOOK_ID=REPLACE_WITH_SANDBOX_WEBHOOK_ID
 # Generate 32 random bytes and base64 encode them for local test config.
 TOKEN_ENCRYPTION_KEY=REPLACE_WITH_BASE64_32_BYTE_KEY
+# Supabase project URL is public configuration; keep the secret key only in
+# the ignored .dev.vars file or Cloudflare Worker secrets, never in source.
+SUPABASE_URL=https://REPLACE_WITH_PROJECT_REF.supabase.co
+SUPABASE_STORAGE_BUCKET=puerto-plata-guide-private-test
+SUPABASE_SECRET_KEY=REPLACE_WITH_SERVER_SIDE_SUPABASE_SECRET_KEY
