@@ -1,5 +1,5 @@
 const STORAGE_API_PATH = "/storage/v1";
-const SUPABASE_HOST_SUFFIX = ".supabase.co";
+const SUPABASE_PROJECT_HOST = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.supabase\.co$/;
 
 /** Validate the single configured project, bucket, and server-only credential. */
 function storageConfig(env) {
@@ -13,8 +13,7 @@ function storageConfig(env) {
   const projectUrl = new URL(env.SUPABASE_URL);
   if (
     projectUrl.protocol !== "https:" ||
-    !projectUrl.hostname.endsWith(SUPABASE_HOST_SUFFIX) ||
-    projectUrl.hostname === SUPABASE_HOST_SUFFIX.slice(1) ||
+    !SUPABASE_PROJECT_HOST.test(projectUrl.hostname) ||
     projectUrl.username ||
     projectUrl.password ||
     projectUrl.port ||
