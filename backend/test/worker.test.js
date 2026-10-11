@@ -342,6 +342,16 @@ test("invalid storage keys fail closed without contacting Supabase", async () =>
   assert.equal((await response.json()).error, "missing_file");
 });
 
+test("Supabase URLs with extra hostname labels fail closed before sending the secret key", async () => {
+  const { env, state } = await makeDownloadEnv();
+  env.SUPABASE_URL = "https://attacker.supabase.co.evil.supabase.co";
+  const response = await withFetch(async () => { throw new Error("invalid host must not receive a request"); }, () => requestDownload(env));
+
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, "missing_file");
+  assert.equal(state.order.download_count, 0);
+});
+
 test("storage access refuses a Supabase publishable key", async () => {
   const { env, state } = await makeDownloadEnv();
   env.SUPABASE_SECRET_KEY = "sb_publishable_not_a_server_secret";
