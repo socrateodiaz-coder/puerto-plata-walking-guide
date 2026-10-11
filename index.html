@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f7f6f1">
+    <meta name="description" content="A self-guided walking guide for cruise passengers arriving at Taino Bay in Puerto Plata.">
+    <title>Puerto Plata on Foot | Taino Bay Walking Guide</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <dialog class="checkout-dialog" id="checkout-dialog" aria-labelledby="checkout-title">
+      <div class="dialog-inner">
+        <button class="icon-button dialog-close" type="button" data-close-dialog aria-label="Close test checkout">&times;</button>
+        <div class="eyebrow"><span class="test-dot"></span> TEST CHECKOUT</div>
+        <h2 id="checkout-title">Your port day, on your terms.</h2>
+        <p class="dialog-copy">This is a demonstration purchase. No payment details are collected and no real charge will be made.</p>
+        <div class="checkout-summary">
+          <span>Puerto Plata on Foot</span>
+          <strong>$XX.00</strong>
+        </div>
+        <button class="button button-primary button-full" type="button" id="complete-test-purchase">Complete test purchase</button>
+        <button class="text-button button-full" type="button" data-close-dialog>Go back</button>
+        <p class="dialog-footnote">Test mode · No payment provider connected</p>
+      </div>
+    </dialog>
+  </body>
+</html>
