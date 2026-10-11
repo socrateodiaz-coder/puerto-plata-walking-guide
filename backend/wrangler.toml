@@ -3,13 +3,14 @@ main = "src/index.js"
 compatibility_date = "2026-10-10"
 workers_dev = true
 
-# Fill the D1 database_id and R2 bucket_name after creating TEST resources.
+# The test D1 database ID is configured. Create/configure the R2 bucket only
+# after R2 access and usage-based billing are approved.
 # Keep separate test and production resources. Production deployment is not
 # implemented or enabled by this prototype; the Worker rejects non-test mode.
 [[d1_databases]]
 binding = "DB"
 database_name = "puerto-plata-guide-test"
-database_id = "REPLACE_AFTER_CREATING_TEST_DATABASE"
+database_id = "c02ba1d3-bcc5-480a-ab76-4ef845ff11a5"
 migrations_dir = "migrations"
 
 [[r2_buckets]]
