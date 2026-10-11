@@ -18,6 +18,19 @@ const baseOrder = {
 };
 const finalPdf = { final_pdf_key: "private/guide.pdf", artifact_kind: "final" };
 
+async function signedStripeWebhook(event, secret) {
+  const body = JSON.stringify(event);
+  const timestamp = Math.floor(Date.now() / 1000);
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const digest = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${timestamp}.${body}`));
+  const signature = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return new Request("https://worker.example/api/webhooks/stripe", {
+    method: "POST",
+    headers: { "Stripe-Signature": `t=${timestamp},v1=${signature}` },
+    body
+  });
+}
+
 test("formats configured amounts using provider minor units", () => {
   assert.equal(currencyScale("USD"), 2);
   assert.equal(amountToDecimal(1234, "usd"), "12.34");
@@ -54,6 +67,33 @@ test("Stripe signatures must be valid and within the timestamp tolerance", async
   assert.equal(await verifyStripeSignature(body, `t=${timestamp},v1=${signature}`, secret, timestamp), true);
   assert.equal(await verifyStripeSignature(body, `t=${timestamp},v1=${"0".repeat(64)}`, secret, timestamp), false);
   assert.equal(await verifyStripeSignature(body, `t=${timestamp - 301},v1=${signature}`, secret, timestamp), false);
+});
+
+test("Stripe live-mode events and Checkout Sessions are rejected despite valid signatures", async () => {
+  const secret = "whsec_unit_test_only";
+  const events = [
+    {
+      id: "evt_live_mode",
+      livemode: true,
+      type: "checkout.session.completed",
+      data: { object: { livemode: false } }
+    },
+    {
+      id: "evt_live_session",
+      livemode: false,
+      type: "checkout.session.completed",
+      data: { object: { livemode: true } }
+    }
+  ];
+
+  for (const event of events) {
+    const response = await worker.fetch(await signedStripeWebhook(event, secret), {
+      APP_ENV: "test",
+      STRIPE_WEBHOOK_SECRET: secret
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error, "live_mode_not_allowed");
+  }
 });
 
 test("default worker configuration exposes no working payment controls", async () => {
