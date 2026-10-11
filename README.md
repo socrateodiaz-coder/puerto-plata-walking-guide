@@ -39,7 +39,7 @@ Choose the selling price and currency, then complete the backend/provider setup 
 
 ## Payment and secure-download preparation
 
-The prepared backend is a Cloudflare Worker API, Cloudflare D1 order database, and private Cloudflare R2 file bucket. GitHub Pages remains a static storefront and never receives payment secrets or guide files. The backend lives in `backend/` and is disabled by default (`PAYMENTS_ENABLED=false`). It only accepts test credentials and calls Stripe test APIs or PayPal's sandbox API; live credentials/endpoints are rejected.
+The prepared backend is a Cloudflare Worker API, Cloudflare D1 order database, and private Supabase Storage bucket. GitHub Pages remains a static storefront and never receives payment secrets or guide files. The backend lives in `backend/` and is disabled by default (`PAYMENTS_ENABLED=false`). It only accepts test credentials and calls Stripe test APIs or PayPal's sandbox API; live credentials/endpoints are rejected. Cloudflare D1 has been created for testing; no Worker is deployed and no remote migration has been applied.
 
 For a U.S. merchant, the integration uses Stripe Checkout for cards and a separate PayPal sandbox checkout for PayPal. Stripe's PayPal method is not offered to U.S.-based Stripe accounts, so a single Stripe integration cannot reliably cover both methods. PayPal may show card funding depending on account eligibility, but Stripe is the dedicated card path.
 
@@ -49,36 +49,38 @@ For a U.S. merchant, the integration uses Stripe Checkout for cards and a separa
 - The server reads the price from D1; the browser cannot supply it. Stripe webhook signatures and PayPal webhook signatures are verified by the Worker. Provider payment state, order ID, amount, and currency are checked.
 - Unique provider event IDs and a guarded `pending` to `paid` transition make repeat payment notifications idempotent.
 - Receipt secrets are hashed in D1. A verified order gets a random 256-bit download token; only its hash and AES-GCM encrypted copy are stored. Receipt access can recover the token only for the matching receipt holder.
-- Every download checks paid status, revocation, expiry, the order limit, and private R2 file availability server-side. The permanent R2 key/URL is never exposed. The atomic download count increments only when a valid private object is about to be served.
+- Every download checks paid status, revocation, expiry, the order limit, and private Supabase object availability server-side. The Worker streams the object from Supabase; the permanent storage URL and secret key are never returned to the browser. The atomic download count increments only when a valid private object is about to be served.
 - Expiry/count defaults are 86,400 seconds and three successful file responses. Each order records its own limit and expiry; change `download_ttl_seconds` or `download_limit` before creating new test orders to configure them.
 - Refund webhooks revoke access. The API rejects unpaid, invalid, revoked, expired, exhausted, and missing-file downloads with useful messages.
-- `backend/private-assets/TEST_ONLY_NOT_THE_FINISHED_GUIDE.pdf` is local-only and ignored by Git. It is prominently marked and must never be sold or sent as the final guide. It can be uploaded only to the private test R2 bucket for sandbox checkout validation.
+- `backend/private-assets/TEST_ONLY_NOT_THE_FINISHED_GUIDE.pdf` is local-only and ignored by Git. It is prominently marked and must never be sold or sent as the final guide. No PDF has been uploaded. If a test upload is later approved, it must go only into the private Supabase test bucket.
 - Email delivery is not configured. A sender/domain and email-service binding must be selected and connected before order emails can be sent.
 
 ### Recommended accounts and settings
 
-1. Cloudflare account with Workers, D1, and R2. Use separate test and production resources; this prototype targets test resources only.
-2. Stripe account with test mode access, a `sk_test_` secret, and a signing secret for `/api/webhooks/stripe`.
-3. PayPal developer/business account with sandbox REST app credentials and a sandbox webhook ID for `/api/webhooks/paypal`.
-4. A selling price and ISO currency you choose. They are intentionally blank. Store the amount in minor units (for example, cents for USD) and the currency as lowercase text.
-5. A generated 32-byte token-encryption key as a Worker secret. Generate separate values for each environment and keep a secure backup; changing a key prevents decrypting already-issued token values.
-6. The Worker URL in `checkout-config.js` and the exact storefront origin in `ALLOWED_ORIGINS`. This URL is public API configuration, not a secret.
-7. The finished guide PDF in private R2, referenced in D1 with `artifact_kind='final'`. No PDF belongs in the public Pages root.
+1. Cloudflare account with Workers and the existing D1 test database. R2 is not used. Keep any later Worker deployment in test mode.
+2. A Supabase Free project and a private Storage bucket named `puerto-plata-guide-private-test`. The project and bucket are not connected yet. Supabase Free currently has storage and bandwidth quotas, and inactive free projects may pause; check the current plan limits before relying on it for production.
+3. Stripe account with test mode access, a `sk_test_` secret, and a signing secret for `/api/webhooks/stripe`.
+4. PayPal developer/business account with sandbox REST app credentials and a sandbox webhook ID for `/api/webhooks/paypal`.
+5. A selling price and ISO currency you choose. They are intentionally blank. Store the amount in minor units (for example, cents for USD) and the currency as lowercase text.
+6. A generated 32-byte token-encryption key as a Worker secret. Generate separate values for each environment and keep a secure backup; changing a key prevents decrypting already-issued token values.
+7. The Worker URL in `checkout-config.js` and the exact storefront origin in `ALLOWED_ORIGINS`. This URL is public API configuration, not a secret.
+8. The finished guide PDF in private Supabase Storage, referenced in D1 with `artifact_kind='final'`. No PDF belongs in the public Pages root.
 
 Payment processing is not live. No API accounts, credentials, price, or Worker deployment are included here. Do not set `PAYMENTS_ENABLED=true` until sandbox setup and webhook delivery are tested. Even then, this Worker supports test mode only.
 
-### Test setup outline
+### Supabase Free test storage setup
 
-Run these commands from `backend/` after installing Node.js/npm:
+The Worker adapter is prepared, but no Supabase project, bucket, URL, or secret key is connected. To prepare the free test storage in the Supabase dashboard:
 
-```powershell
-npm install
-npx wrangler login
-npx wrangler d1 create puerto-plata-guide-test
-npx wrangler r2 bucket create puerto-plata-guide-private-test
-```
+1. Sign in to Supabase and select an existing Free project or create one on the Free plan. Stop if the dashboard requests a payment method, paid plan, or billing approval.
+2. Open **Storage** and create a bucket named `puerto-plata-guide-private-test`. Set it to **Private**; never enable public access.
+3. In **Project Settings → API Keys**, obtain the project URL and a new `sb_secret_...` key for server-side use. Do not paste the key into ChatGPT, browser code, GitHub, or `wrangler.toml`.
+4. For local testing, put `SUPABASE_URL` and `SUPABASE_SECRET_KEY` into the ignored `backend/.dev.vars` file. The committed `.dev.vars.example` contains placeholders only. The bucket name is a non-secret Worker variable in `wrangler.toml`.
+5. For a later Cloudflare test deployment, add the URL as a Worker variable and the `sb_secret_...` value as a Worker secret through the Cloudflare dashboard. Do not deploy as part of initial setup.
 
-Copy the D1 ID returned by Wrangler into `wrangler.toml`, then apply the initial schema:
+The Supabase secret key bypasses Storage access policies, so keep it only in a trusted Worker/local server environment. The Worker requests files through the private authenticated Storage endpoint and streams bytes to a buyer only after checking the D1 token, expiry, revocation, and download count. Do not give customers Supabase signed URLs; those URLs can be reused until expiry.
+
+Cloudflare D1 test database `puerto-plata-guide-test` is already created and its ID is in `backend/wrangler.toml`. Its initial schema has **not** been applied remotely. Run the migration only after separately authorizing that step:
 
 ```powershell
 npx wrangler d1 migrations apply puerto-plata-guide-test --remote
@@ -92,11 +94,7 @@ SET price_minor = <minor-units>, currency = '<currency>', updated_at = unixepoch
 WHERE id = 'pp-walking-guide-v1';
 ```
 
-Upload the test-only local file to the private test bucket and mark it as a placeholder in D1:
-
-```powershell
-npx wrangler r2 object put puerto-plata-guide-private-test/TEST_ONLY_NOT_THE_FINISHED_GUIDE.pdf --file="private-assets/TEST_ONLY_NOT_THE_FINISHED_GUIDE.pdf" --content-type="application/pdf"
-```
+If and when you separately approve uploading a test file, use the Supabase dashboard or Storage API to place the local test-only file in the private bucket, then mark it as a placeholder in D1. Do not upload it to GitHub Pages or make the bucket public.
 
 ```sql
 UPDATE product_config
@@ -114,7 +112,7 @@ After the sandbox settings are ready, deploy the test Worker to its `workers.dev
 - Attempt a failed provider payment and cancel checkout. The order must not become paid, and receipt/download routes must withhold access.
 - POST a webhook without a signature and another with an invalid signature; both must be rejected.
 - Resend the exact same valid webhook event. It must not create a second order, token, or entitlement.
-- Download the private test placeholder; confirm the response contains the PDF but no R2 object key or permanent URL.
+- Download the private test placeholder; confirm the Worker streams the PDF and no Supabase URL or secret key appears in the response.
 - Temporarily set `download_ttl_seconds=60` for new test purchases. After 60 seconds, confirm the API rejects the link with an expiry message; restore 86,400 afterward.
 - Download three times successfully, then try a fourth time. The server must reject it and D1 must show a count of 3.
 - Set a test order's `revoked_at=unixepoch()` and confirm its download token is refused.
@@ -126,7 +124,7 @@ Use a separate test database and bucket for these checks. Do not log receipt/dow
 
 ### Local unit checks
 
-Node's built-in test runner covers amount conversion, signature validation, order paid-state transitions, and the download policy outcomes:
+Node's built-in test runner covers amount conversion, Stripe signature and live-mode rejection, disabled checkout, private Supabase file access, missing files, the download limit, expired links, revoked access, and unsafe object paths:
 
 ```powershell
 npm test
