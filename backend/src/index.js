@@ -1,3 +1,5 @@
+import { getPrivateObject, hasPrivateObject } from "./storage.js";
+
 const PRODUCT_ID = "pp-walking-guide-v1";
 const encoder = new TextEncoder();
 const MAX_JSON_BYTES = 32_768;
@@ -106,7 +108,7 @@ async function handleApiRequest(request, env, url) {
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(corsHeaders(origin))) headers.set(name, value);
   headers.set("X-Content-Type-Options", "nosniff");
-  headers.set("Cache-Control", "no-store");
+  if (!headers.has("Cache-Control")) headers.set("Cache-Control", "no-store");
   headers.set("Referrer-Policy", "no-referrer");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
@@ -119,8 +121,8 @@ async function publicConfig(env) {
   const stripeEnabled = Boolean(commonReady && env.STRIPE_SECRET_KEY?.startsWith("sk_test_") && env.STRIPE_WEBHOOK_SECRET?.startsWith("whsec_"));
   const paypalEnabled = Boolean(commonReady && env.PAYPAL_CLIENT_ID && env.PAYPAL_CLIENT_SECRET && env.PAYPAL_WEBHOOK_ID && paypalApiBase(env) === PAYPAL_SANDBOX_API);
   let filePresent = false;
-  if (product?.final_pdf_key && env.GUIDE_FILES) {
-    try { filePresent = Boolean(await env.GUIDE_FILES.head(product.final_pdf_key)); } catch { filePresent = false; }
+  if (product?.final_pdf_key) {
+    try { filePresent = await hasPrivateObject(env, product.final_pdf_key); } catch { filePresent = false; }
   }
   return json({
     product: product ? { id: product.id, name: product.name } : { id: PRODUCT_ID, name: "Puerto Plata on Foot" },
@@ -370,30 +372,31 @@ async function downloadGuide(request, env) {
   const access = evaluateDownloadAccess(order, now, product, env.APP_ENV);
   if (!access.allowed) return json(downloadError(access.reason), downloadErrorStatus(access.reason));
 
-  const object = await env.GUIDE_FILES.get(product.final_pdf_key);
+  let object;
+  try { object = await getPrivateObject(env, product.final_pdf_key); }
+  catch { object = null; }
   if (!object) return json(downloadError("missing_file"), 503);
   const incremented = await env.DB.prepare(
     "UPDATE orders SET download_count = download_count + 1, updated_at = ? WHERE id = ? AND status = 'paid' AND revoked_at IS NULL AND download_expires_at > ? AND download_count < download_limit RETURNING download_count"
   ).bind(now, order.id, now).first();
   if (!incremented) {
+    await object.body.cancel().catch(() => {});
     order = await env.DB.prepare("SELECT * FROM orders WHERE id = ?").bind(order.id).first();
     const refreshedAccess = evaluateDownloadAccess(order, nowSeconds(), product, env.APP_ENV);
     return json(downloadError(refreshedAccess.reason), downloadErrorStatus(refreshedAccess.reason));
   }
   const isPlaceholder = product.artifact_kind === "test-placeholder";
-  return new Response(object.body, {
-    status: 200,
-    headers: {
+  const headers = {
       "Content-Type": "application/pdf",
       "Content-Disposition": `attachment; filename="${isPlaceholder ? "TEST_ONLY_NOT_THE_FINISHED_GUIDE.pdf" : "Puerto-Plata-Walking-Guide.pdf"}"`,
-      "Content-Length": String(object.size),
       "Cache-Control": "private, no-store, max-age=0",
       "X-Content-Type-Options": "nosniff",
       "X-Guide-Test-Placeholder": isPlaceholder ? "true" : "false",
       "X-Downloads-Remaining": String(order.download_limit - incremented.download_count),
       "Referrer-Policy": "no-referrer"
-    }
-  });
+  };
+  if (object.size !== null) headers["Content-Length"] = String(object.size);
+  return new Response(object.body, { status: 200, headers });
 }
 
 async function checkoutReadiness(env, provider) {
@@ -527,9 +530,9 @@ async function getProduct(env) {
 }
 
 async function artifactIsAvailable(env, product) {
-  if (!product?.final_pdf_key || product.artifact_kind === "missing" || !env.GUIDE_FILES) return { ready: false };
+  if (!product?.final_pdf_key || product.artifact_kind === "missing") return { ready: false };
   if (product.artifact_kind === "test-placeholder" && env.APP_ENV !== "test") return { ready: false };
-  try { return { ready: Boolean(await env.GUIDE_FILES.head(product.final_pdf_key)) }; } catch { return { ready: false }; }
+  try { return { ready: await hasPrivateObject(env, product.final_pdf_key) }; } catch { return { ready: false }; }
 }
 
 async function encryptionKeyReady(env) {
