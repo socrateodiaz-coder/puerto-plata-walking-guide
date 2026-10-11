@@ -35,4 +35,101 @@ The existing Pages configuration publishes the main branch from the repository r
 
 ## Needed before accepting orders
 
-Choose a payment provider. Then implement server-side checkout creation, provider test/live configuration stored as server secrets, signed webhook verification, persistent order records, and protected file delivery that checks a verified payment before issuing a time-limited link. Upload the finished PDF to private storage rather than a public Pages folder. Keep test and live credentials separate; never put secret keys in browser code.
+Choose the selling price and currency, then complete the backend/provider setup below. Upload the finished PDF to private storage rather than a public Pages folder. Keep credentials in Worker secrets; never put secret keys in browser code.
+
+## Payment and secure-download preparation
+
+The prepared backend is a Cloudflare Worker API, Cloudflare D1 order database, and private Cloudflare R2 file bucket. GitHub Pages remains a static storefront and never receives payment secrets or guide files. The backend lives in `backend/` and is disabled by default (`PAYMENTS_ENABLED=false`). It only accepts test credentials and calls Stripe test APIs or PayPal's sandbox API; live credentials/endpoints are rejected.
+
+For a U.S. merchant, the integration uses Stripe Checkout for cards and a separate PayPal sandbox checkout for PayPal. Stripe's PayPal method is not offered to U.S.-based Stripe accounts, so a single Stripe integration cannot reliably cover both methods. PayPal may show card funding depending on account eligibility, but Stripe is the dedicated card path.
+
+### Current implementation
+
+- The existing mobile sales page and guide preview are preserved. Checkout only unlocks when the API reports a configured price, sandbox provider, signed webhook, and token-encryption key.
+- The server reads the price from D1; the browser cannot supply it. Stripe webhook signatures and PayPal webhook signatures are verified by the Worker. Provider payment state, order ID, amount, and currency are checked.
+- Unique provider event IDs and a guarded `pending` to `paid` transition make repeat payment notifications idempotent.
+- Receipt secrets are hashed in D1. A verified order gets a random 256-bit download token; only its hash and AES-GCM encrypted copy are stored. Receipt access can recover the token only for the matching receipt holder.
+- Every download checks paid status, revocation, expiry, the order limit, and private R2 file availability server-side. The permanent R2 key/URL is never exposed. The atomic download count increments only when a valid private object is about to be served.
+- Expiry/count defaults are 86,400 seconds and three successful file responses. Each order records its own limit and expiry; change `download_ttl_seconds` or `download_limit` before creating new test orders to configure them.
+- Refund webhooks revoke access. The API rejects unpaid, invalid, revoked, expired, exhausted, and missing-file downloads with useful messages.
+- `backend/private-assets/TEST_ONLY_NOT_THE_FINISHED_GUIDE.pdf` is local-only and ignored by Git. It is prominently marked and must never be sold or sent as the final guide. It can be uploaded only to the private test R2 bucket for sandbox checkout validation.
+- Email delivery is not configured. A sender/domain and email-service binding must be selected and connected before order emails can be sent.
+
+### Recommended accounts and settings
+
+1. Cloudflare account with Workers, D1, and R2. Use separate test and production resources; this prototype targets test resources only.
+2. Stripe account with test mode access, a `sk_test_` secret, and a signing secret for `/api/webhooks/stripe`.
+3. PayPal developer/business account with sandbox REST app credentials and a sandbox webhook ID for `/api/webhooks/paypal`.
+4. A selling price and ISO currency you choose. They are intentionally blank. Store the amount in minor units (for example, cents for USD) and the currency as lowercase text.
+5. A generated 32-byte token-encryption key as a Worker secret. Generate separate values for each environment and keep a secure backup; changing a key prevents decrypting already-issued token values.
+6. The Worker URL in `checkout-config.js` and the exact storefront origin in `ALLOWED_ORIGINS`. This URL is public API configuration, not a secret.
+7. The finished guide PDF in private R2, referenced in D1 with `artifact_kind='final'`. No PDF belongs in the public Pages root.
+
+Payment processing is not live. No API accounts, credentials, price, or Worker deployment are included here. Do not set `PAYMENTS_ENABLED=true` until sandbox setup and webhook delivery are tested. Even then, this Worker supports test mode only.
+
+### Test setup outline
+
+Run these commands from `backend/` after installing Node.js/npm:
+
+```powershell
+npm install
+npx wrangler login
+npx wrangler d1 create puerto-plata-guide-test
+npx wrangler r2 bucket create puerto-plata-guide-private-test
+```
+
+Copy the D1 ID returned by Wrangler into `wrangler.toml`, then apply the initial schema:
+
+```powershell
+npx wrangler d1 migrations apply puerto-plata-guide-test --remote
+```
+
+Set the price only after you decide it. Replace both bracketed placeholders before running this SQL; no default amount is assumed:
+
+```sql
+UPDATE product_config
+SET price_minor = <minor-units>, currency = '<currency>', updated_at = unixepoch()
+WHERE id = 'pp-walking-guide-v1';
+```
+
+Upload the test-only local file to the private test bucket and mark it as a placeholder in D1:
+
+```powershell
+npx wrangler r2 object put puerto-plata-guide-private-test/TEST_ONLY_NOT_THE_FINISHED_GUIDE.pdf --file="private-assets/TEST_ONLY_NOT_THE_FINISHED_GUIDE.pdf" --content-type="application/pdf"
+```
+
+```sql
+UPDATE product_config
+SET final_pdf_key = 'TEST_ONLY_NOT_THE_FINISHED_GUIDE.pdf', artifact_kind = 'test-placeholder', updated_at = unixepoch()
+WHERE id = 'pp-walking-guide-v1';
+```
+
+Enter sandbox keys using `npx wrangler secret put STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID`, and `TOKEN_ENCRYPTION_KEY`. Do not put values in GitHub, `checkout-config.js`, or committed Wrangler config. For local work, copy `.dev.vars.example` to `.dev.vars`; Git ignores the private copy. Configure Stripe test and PayPal sandbox webhook URLs at their providers, then set `PAYMENTS_ENABLED=true` only in the test Worker environment. If testing from the local static preview, set its local site origin/CORS allowlist in the local `.dev.vars` file.
+
+After the sandbox settings are ready, deploy the test Worker to its `workers.dev` URL. Put that URL in `window.PUERTO_PLATA_CHECKOUT.apiBase` in `checkout-config.js`, then use the existing GitHub Pages site or a local static server. The frontend file contains only the public API address. Production deployment is not part of this prototype.
+
+### Test checklist before launch
+
+- Complete a Stripe card sandbox payment and a PayPal sandbox payment. Confirm provider dashboard and D1 show one paid order at the configured amount/currency.
+- Attempt a failed provider payment and cancel checkout. The order must not become paid, and receipt/download routes must withhold access.
+- POST a webhook without a signature and another with an invalid signature; both must be rejected.
+- Resend the exact same valid webhook event. It must not create a second order, token, or entitlement.
+- Download the private test placeholder; confirm the response contains the PDF but no R2 object key or permanent URL.
+- Temporarily set `download_ttl_seconds=60` for new test purchases. After 60 seconds, confirm the API rejects the link with an expiry message; restore 86,400 afterward.
+- Download three times successfully, then try a fourth time. The server must reject it and D1 must show a count of 3.
+- Set a test order's `revoked_at=unixepoch()` and confirm its download token is refused.
+- Set the product artifact to `missing` and clear its key. Confirm payment status can be shown while download access reports that the file is not ready.
+- Exercise checkout, provider return/cancel, thank-you, and expired-link screens on phone and desktop widths. Check links, network requests, and browser console.
+- Before launch, repeat the matrix with the finished PDF stored privately and `artifact_kind='final'`.
+
+Use a separate test database and bucket for these checks. Do not log receipt/download tokens or provider secrets. Connected sandbox payments and webhooks cannot be exercised until you connect the accounts and configure the settings above.
+
+### Local unit checks
+
+Node's built-in test runner covers amount conversion, signature validation, order paid-state transitions, and the download policy outcomes:
+
+```powershell
+npm test
+```
+
+These checks do not replace the provider sandbox/webhook checklist.

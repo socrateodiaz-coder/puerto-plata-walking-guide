@@ -44,7 +44,7 @@
     return [
       "<footer class='footer'><div class='footer-inner wrap'>",
       "<p class='footer-copy'>Puerto Plata on Foot <span aria-hidden='true'>·</span> Preview build. Guide copy, route details, cover art, and price are placeholders.</p>",
-      "<p class='footer-status'>Checkout is not connected. No payments are accepted and no guide download is available.</p>",
+      "<p class='footer-status'>Payments are not live. Checkout can run in test mode only after the sandbox backend is configured.</p>",
       "<nav class='footer-nav' aria-label='Footer navigation'><a href='" + escapeHtml(pageHref("home")) + "'>Home</a><a href='" + escapeHtml(pageHref("preview")) + "'>Guide preview</a></nav>",
       "</div></footer>"
     ].join("");
@@ -93,7 +93,7 @@
       "<ul class='feature-chips' aria-label='Guide features'><li>Start from Taino Bay</li><li>Explore independently</li><li>Made for port days</li></ul>",
       "<div class='hero-actions'><a class='button button-primary' href='" + escapeHtml(pageHref("checkout")) + "'>Get Your Walking Guide <span aria-hidden='true'>→</span></a>",
       "<a class='button button-secondary' href='" + escapeHtml(pageHref("preview")) + "'>Preview the Guide</a></div>",
-      "<p class='price-line'><strong>" + moneyPlaceholder() + "</strong> <span>placeholder price · one-time digital guide</span></p>",
+      "<p class='price-line'><strong data-product-price>" + moneyPlaceholder() + "</strong> <span>one-time digital guide</span></p>",
       "</div>" + coverArt() + "</div></section>",
       "<section class='benefits-section'><div class='wrap'><div class='section-heading'>",
       "<p class='eyebrow'><span class='eyebrow-mark'></span> YOUR DAY, YOUR WAY</p><h2>See more of the city at your own pace.</h2>",
@@ -163,14 +163,16 @@
   function checkoutPage() {
     return pageShell("checkout", [
       "<section class='checkout-layout wrap'><div class='checkout-copy'><p class='eyebrow'><span class='eyebrow-mark'></span> PURCHASE / CHECKOUT</p>",
-      "<h1>Your guide is almost ready.</h1><p class='hero-description'>Review the placeholder purchase details. Checkout is intentionally unavailable while no payment provider or verified order system is configured.</p>",
+      "<h1>Your guide is almost ready.</h1><p class='hero-description'>Review the purchase details. Checkout remains closed until a test backend and provider sandbox are deliberately configured.</p>",
       "<a class='text-link' href='" + escapeHtml(pageHref("home")) + "'>← Return to the sales page</a></div>",
       "<section class='checkout-card' aria-labelledby='checkout-title'><div class='checkout-card-heading'><div><p class='eyebrow'>DIGITAL WALKING GUIDE</p>",
       "<h2 id='checkout-title'>Puerto Plata on Foot</h2></div><span class='format-pill'>PDF · planned</span></div>",
-      "<div class='checkout-price'><span>Placeholder price</span><strong>" + moneyPlaceholder() + "</strong></div>",
-      "<div class='checkout-status' role='status'><strong>Checkout is not connected</strong><p>This website does not accept payments. There is no card form, test charge, or payment confirmation.</p></div>",
-      "<button class='button button-disabled button-full' type='button' disabled>Payment setup required</button>",
-      "<p class='checkout-footnote'>No payment has been processed, and no paid guide can be downloaded from this preview.</p>",
+      "<div class='checkout-price'><span>One-time digital guide</span><strong data-product-price>" + moneyPlaceholder() + "</strong></div>",
+      "<div class='checkout-status' id='checkout-status' role='status' aria-live='polite'><strong>Test checkout is not configured</strong><p>No payments are accepted until a test backend and provider sandbox are deliberately connected.</p></div>",
+      "<div class='provider-options' id='provider-options' hidden><p class='test-mode-note'>TEST MODE · provider sandbox only · no live charges</p>",
+      "<button class='button button-primary button-full' id='stripe-checkout-button' type='button' hidden>Pay by card (test)</button>",
+      "<div class='paypal-button-wrap' id='paypal-button-container' hidden></div></div>",
+      "<p class='checkout-footnote'>The finished PDF is not yet loaded. A clearly marked test placeholder may be used for validation, never as the finished guide.</p>",
       "<div class='checkout-links'><a href='" + escapeHtml(pageHref("preview")) + "'>Review the guide preview</a><a href='" + escapeHtml(pageHref("home")) + "'>Back to home</a></div>",
       "</section></section>"
     ].join(""));
@@ -186,13 +188,44 @@
     ].join(""));
   }
 
+  function thankYouPage() {
+    return pageShell("", [
+      "<section class='state-main wrap'><article class='state-card' id='receipt-card'>",
+      "<p class='eyebrow'><span class='eyebrow-mark'></span> TEST PURCHASE</p>",
+      "<h1 id='receipt-title'>Verifying your purchase…</h1>",
+      "<p class='state-copy' id='receipt-message' role='status' aria-live='polite'>The payment provider must confirm the test payment before download access is shown.</p>",
+      "<div id='receipt-actions' class='state-actions' hidden></div>",
+      "<div class='state-actions' id='receipt-fallback'><a class='button button-secondary button-full' href='" + escapeHtml(pageHref("home")) + "'>Return to the sales page</a></div>",
+      "</article></section>"
+    ].join(""));
+  }
+
+  function downloadPage() {
+    return pageShell("", [
+      "<section class='state-main wrap'><article class='state-card'>",
+      "<p class='eyebrow'><span class='eyebrow-mark'></span> SECURE GUIDE DOWNLOAD</p>",
+      "<h1 id='download-title'>Checking download access…</h1>",
+      "<p class='state-copy' id='download-message' role='status' aria-live='polite'>Access is checked by the payment backend each time you download.</p>",
+      "<button class='button button-primary button-full' id='download-guide-button' type='button' hidden>Download the guide</button>",
+      "<p class='content-note' id='download-limit-note' hidden></p>",
+      "<div class='state-actions'><a class='button button-secondary button-full' href='" + escapeHtml(pageHref("home")) + "'>Return to the sales page</a></div>",
+      "</article></section>"
+    ].join(""));
+  }
+
   function render() {
     const params = new URLSearchParams(window.location.search);
     const page = params.get("page");
     const legacyDownloadRoute = params.has("download") || params.has("success");
     if (legacyDownloadRoute) window.history.replaceState({}, "", pageHref("home"));
 
-    if (legacyDownloadRoute || page === "thanks" || page === "download") {
+    if (page === "thanks") {
+      app.innerHTML = thankYouPage();
+      document.title = "Test purchase confirmation | Puerto Plata on Foot";
+    } else if (page === "download") {
+      app.innerHTML = downloadPage();
+      document.title = "Secure guide download | Puerto Plata on Foot";
+    } else if (legacyDownloadRoute) {
       app.innerHTML = paymentGatePage();
       document.title = "Payment verification required | Puerto Plata on Foot";
     } else if (page === "preview") {
