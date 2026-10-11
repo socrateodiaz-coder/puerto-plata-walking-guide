@@ -100,6 +100,10 @@ async function withFetch(fetchImpl, action) {
   finally { globalThis.fetch = originalFetch; }
 }
 
+function privateBucketInfo() {
+  return Response.json({ id: "puerto-plata-guide-private-test", public: false });
+}
+
 async function signedStripeWebhook(event, secret) {
   const body = JSON.stringify(event);
   const timestamp = Math.floor(Date.now() / 1000);
@@ -214,11 +218,12 @@ test("private guide files are streamed through the Worker with a server-only Sup
   const response = await withFetch(async (input, init) => {
     const target = new URL(input);
     assert.equal(target.origin, "https://test-project.supabase.co");
-    assert.equal(target.pathname, "/storage/v1/object/authenticated/puerto-plata-guide-private-test/private/guide.pdf");
     assert.equal(init.method, "GET");
     assert.equal(init.redirect, "manual");
     assert.equal(init.headers.apikey, "sb_secret_unit_test_only");
     assert.equal(init.headers.authorization, undefined);
+    if (target.pathname === "/storage/v1/bucket/puerto-plata-guide-private-test") return privateBucketInfo();
+    assert.equal(target.pathname, "/storage/v1/object/authenticated/puerto-plata-guide-private-test/private/guide.pdf");
     return new Response(new Uint8Array([37, 80, 68, 70]), {
       status: 200,
       headers: { "Content-Length": "4", "Content-Type": "application/pdf" }
@@ -239,9 +244,10 @@ test("public config checks private object metadata without exposing Supabase set
   const { env } = await makeDownloadEnv();
   const response = await withFetch(async (input, init) => {
     const target = new URL(input);
-    assert.equal(target.pathname, "/storage/v1/object/info/puerto-plata-guide-private-test/private/guide.pdf");
     assert.equal(init.headers.apikey, "sb_secret_unit_test_only");
     assert.equal(init.headers.authorization, undefined);
+    if (target.pathname === "/storage/v1/bucket/puerto-plata-guide-private-test") return privateBucketInfo();
+    assert.equal(target.pathname, "/storage/v1/object/info/puerto-plata-guide-private-test/private/guide.pdf");
     return Response.json({ name: "guide.pdf", size: 4 });
   }, () => worker.fetch(new Request("https://worker.example/api/config"), env));
   const body = await response.json();
@@ -254,7 +260,12 @@ test("public config checks private object metadata without exposing Supabase set
 
 test("a missing private object returns a useful unavailable response without consuming a download", async () => {
   const { env, state } = await makeDownloadEnv();
-  const response = await withFetch(async () => new Response("not found", { status: 404 }), () => requestDownload(env));
+  const response = await withFetch(async (input) => {
+    const target = new URL(input);
+    if (target.pathname === "/storage/v1/bucket/puerto-plata-guide-private-test") return privateBucketInfo();
+    assert.equal(target.pathname, "/storage/v1/object/authenticated/puerto-plata-guide-private-test/private/guide.pdf");
+    return new Response("not found", { status: 404 });
+  }, () => requestDownload(env));
   const body = await response.json();
 
   assert.equal(response.status, 503);
@@ -265,9 +276,16 @@ test("a missing private object returns a useful unavailable response without con
 
 test("the Worker enforces the three-download limit before another storage request", async () => {
   const { env, state } = await makeDownloadEnv({ download_count: 2 });
-  let storageRequests = 0;
-  const response = await withFetch(async () => {
-    storageRequests += 1;
+  let bucketChecks = 0;
+  let objectRequests = 0;
+  const response = await withFetch(async (input) => {
+    const target = new URL(input);
+    if (target.pathname === "/storage/v1/bucket/puerto-plata-guide-private-test") {
+      bucketChecks += 1;
+      return privateBucketInfo();
+    }
+    objectRequests += 1;
+    assert.equal(target.pathname, "/storage/v1/object/authenticated/puerto-plata-guide-private-test/private/guide.pdf");
     return new Response(new Uint8Array([37, 80, 68, 70]), { status: 200 });
   }, async () => {
     const allowed = await requestDownload(env);
@@ -279,7 +297,23 @@ test("the Worker enforces the three-download limit before another storage reques
   assert.equal(response.status, 429);
   assert.equal((await response.json()).error, "exhausted");
   assert.equal(state.order.download_count, 3);
-  assert.equal(storageRequests, 1);
+  assert.equal(bucketChecks, 1);
+  assert.equal(objectRequests, 1);
+});
+
+test("a public Supabase bucket is rejected before file metadata or bytes are requested", async () => {
+  const { env, state } = await makeDownloadEnv();
+  const response = await withFetch(async (input, init) => {
+    const target = new URL(input);
+    assert.equal(target.pathname, "/storage/v1/bucket/puerto-plata-guide-private-test");
+    assert.equal(init.headers.apikey, "sb_secret_unit_test_only");
+    assert.equal(init.headers.authorization, undefined);
+    return Response.json({ id: "puerto-plata-guide-private-test", public: true });
+  }, () => requestDownload(env));
+
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, "missing_file");
+  assert.equal(state.order.download_count, 0);
 });
 
 test("expired download links are rejected before private storage is contacted", async () => {
@@ -317,3 +351,4 @@ test("storage access refuses a Supabase publishable key", async () => {
   assert.equal((await response.json()).error, "missing_file");
   assert.equal(state.order.download_count, 0);
 });
+
