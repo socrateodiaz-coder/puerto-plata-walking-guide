@@ -271,11 +271,16 @@ async function stripeWebhook(request, env) {
   if (!await verifyStripeSignature(raw, signature, env.STRIPE_WEBHOOK_SECRET)) return json({ error: "invalid_signature" }, 400);
   let event;
   try { event = JSON.parse(raw); } catch { return json({ error: "invalid_payload" }, 400); }
+  if (event.livemode !== false) return json({ error: "live_mode_not_allowed" }, 400);
+  const completedSession = event.type === "checkout.session.completed" ? event.data?.object : null;
+  if (event.type === "checkout.session.completed" && completedSession?.livemode !== false) {
+    return json({ error: "live_mode_not_allowed" }, 400);
+  }
   const product = await getProduct(env);
   if (!product) return json({ error: "product_not_configured" }, 503);
 
   if (event.type === "checkout.session.completed") {
-    const session = event.data?.object;
+    const session = completedSession;
     const orderId = session?.metadata?.order_id;
     const order = await env.DB.prepare("SELECT * FROM orders WHERE id = ? AND provider = 'stripe'").bind(orderId || "").first();
     if (!order || session?.id !== order.provider_checkout_id || session?.client_reference_id !== order.id || session?.mode !== "payment" || session?.payment_status !== "paid" || !matchesStripeSession(session, order)) {
