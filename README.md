@@ -39,7 +39,7 @@ Choose the selling price and currency, then complete the backend/provider setup 
 
 ## Payment and secure-download preparation
 
-The prepared backend is a Cloudflare Worker API, Cloudflare D1 order database, and private Supabase Storage bucket. GitHub Pages remains a static storefront and never receives payment secrets or guide files. The backend lives in `backend/` and is disabled by default (`PAYMENTS_ENABLED=false`). It only accepts test credentials and calls Stripe test APIs or PayPal's sandbox API; live credentials/endpoints are rejected. Cloudflare D1 has been created for testing; no Worker is deployed and no remote migration has been applied.
+The prepared backend is a Cloudflare Worker API, Cloudflare D1 order database, and private Supabase Storage bucket. GitHub Pages remains a static storefront and never receives payment secrets or guide files. The backend lives in `backend/` and is disabled by default (`PAYMENTS_ENABLED=false`). It only accepts test credentials and calls Stripe test APIs or PayPal's sandbox API; live credentials/endpoints are rejected. Cloudflare D1 has been created for testing; no Worker is deployed and no remote migration has been applied. The Supabase Free test project and private bucket have been created, with the public project URL and bucket name in `backend/wrangler.toml`. The Supabase secret key is not configured, and no PDF is uploaded.
 
 For a U.S. merchant, the integration uses Stripe Checkout for cards and a separate PayPal sandbox checkout for PayPal. Stripe's PayPal method is not offered to U.S.-based Stripe accounts, so a single Stripe integration cannot reliably cover both methods. PayPal may show card funding depending on account eligibility, but Stripe is the dedicated card path.
 
@@ -58,7 +58,7 @@ For a U.S. merchant, the integration uses Stripe Checkout for cards and a separa
 ### Recommended accounts and settings
 
 1. Cloudflare account with Workers and the existing D1 test database. R2 is not used. Keep any later Worker deployment in test mode.
-2. A Supabase Free project and a private Storage bucket named `puerto-plata-guide-private-test`. The project and bucket are not connected yet. Supabase Free currently has storage and bandwidth quotas, and inactive free projects may pause; check the current plan limits before relying on it for production.
+2. The Supabase Free project `Puerto Plata Guide Test` and private Storage bucket `puerto-plata-guide-private-test` are created. The bucket's public access switch was verified off. Supabase Free has storage and bandwidth quotas, and inactive free projects may pause; check the current plan limits before relying on it for production.
 3. Stripe account with test mode access, a `sk_test_` secret, and a signing secret for `/api/webhooks/stripe`.
 4. PayPal developer/business account with sandbox REST app credentials and a sandbox webhook ID for `/api/webhooks/paypal`.
 5. A selling price and ISO currency you choose. They are intentionally blank. Store the amount in minor units (for example, cents for USD) and the currency as lowercase text.
@@ -66,17 +66,17 @@ For a U.S. merchant, the integration uses Stripe Checkout for cards and a separa
 7. The Worker URL in `checkout-config.js` and the exact storefront origin in `ALLOWED_ORIGINS`. This URL is public API configuration, not a secret.
 8. The finished guide PDF in private Supabase Storage, referenced in D1 with `artifact_kind='final'`. No PDF belongs in the public Pages root.
 
-Payment processing is not live. No API accounts, credentials, price, or Worker deployment are included here. Do not set `PAYMENTS_ENABLED=true` until sandbox setup and webhook delivery are tested. Even then, this Worker supports test mode only.
+Payment processing is not live. No Stripe or PayPal accounts/credentials, price, or Worker deployment are configured. The Supabase test project URL is public configuration; its server-only secret key is absent. Do not set `PAYMENTS_ENABLED=true` until sandbox setup and webhook delivery are tested. Even then, this Worker supports test mode only.
 
 ### Supabase Free test storage setup
 
-The Worker adapter is prepared, but no Supabase project, bucket, URL, or secret key is connected. To prepare the free test storage in the Supabase dashboard:
+The Worker adapter is prepared and the Free test project and private bucket exist. The project URL and bucket name are configured; the server-only key is intentionally absent. In the Supabase dashboard:
 
-1. Sign in to Supabase and select an existing Free project or create one on the Free plan. Stop if the dashboard requests a payment method, paid plan, or billing approval.
-2. Open **Storage** and create a bucket named `puerto-plata-guide-private-test`. Set it to **Private**; never enable public access. The Worker verifies this setting before each object metadata or download request and fails closed if it cannot confirm the bucket is private.
-3. In **Project Settings → API Keys**, obtain the project URL and a new `sb_secret_...` key for server-side use. Do not paste the key into ChatGPT, browser code, GitHub, or `wrangler.toml`.
-4. For local testing, put `SUPABASE_URL` and `SUPABASE_SECRET_KEY` into the ignored `backend/.dev.vars` file. The committed `.dev.vars.example` contains placeholders only. The bucket name is a non-secret Worker variable in `wrangler.toml`.
-5. For a later Cloudflare test deployment, add the URL as a Worker variable and the `sb_secret_...` value as a Worker secret through the Cloudflare dashboard. Do not deploy as part of initial setup.
+1. The project `Puerto Plata Guide Test` is on the **Free** plan. Stop if a later dashboard step requests a payment method, paid plan, or billing approval.
+2. The bucket `puerto-plata-guide-private-test` already exists. Its **Public bucket** switch is off; never enable public access. The Worker verifies this setting before each object metadata or download request and fails closed if it cannot confirm the bucket is private.
+3. The project's public URL is configured in `backend/wrangler.toml`. A server-only `sb_secret_...` key is still needed for local storage tests; do not paste it into ChatGPT, browser code, GitHub, or `wrangler.toml`.
+4. If local testing is separately authorized, put only `SUPABASE_SECRET_KEY` into the ignored `backend/.dev.vars` file. The committed `.dev.vars.example` contains placeholders only.
+5. For a later Cloudflare test deployment, configure `sb_secret_...` through the Cloudflare dashboard as a Worker secret. Do not deploy as part of this setup.
 
 The Supabase secret key bypasses Storage access policies, so keep it only in a trusted Worker/local server environment. The Worker requests files through the private authenticated Storage endpoint and streams bytes to a buyer only after checking the D1 token, expiry, revocation, and download count. It does not mint signed or public URLs. A Supabase dashboard owner could still change the bucket to public outside the Worker; the Worker will stop serving it on the next request, so leave the bucket private in the dashboard at all times.
 
