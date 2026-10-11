@@ -1,11 +1,8 @@
-const STORAGE_API_PATH = "/storage/v1/object";
+const STORAGE_API_PATH = "/storage/v1";
 const SUPABASE_HOST_SUFFIX = ".supabase.co";
 
-/**
- * Build a private-object URL only for the configured Supabase project and
- * bucket. Object keys come from D1, but are still validated as untrusted data.
- */
-function storageRequest(env, operation, objectKey) {
+/** Validate the single configured project, bucket, and server-only credential. */
+function storageConfig(env) {
   if (!env.SUPABASE_URL || !env.SUPABASE_STORAGE_BUCKET || !env.SUPABASE_SECRET_KEY) {
     throw new Error("supabase_storage_not_configured");
   }
@@ -33,24 +30,38 @@ function storageRequest(env, operation, objectKey) {
     throw new Error("invalid_supabase_bucket");
   }
 
+  return { origin: projectUrl.origin, bucket, secretKey: env.SUPABASE_SECRET_KEY };
+}
+
+function requestInit(config, accept = "application/json") {
+  return {
+    method: "GET",
+    headers: {
+      // Supabase secret API keys belong in apikey. Do not also send this
+      // opaque key as a Bearer JWT in Authorization.
+      apikey: config.secretKey,
+      Accept: accept
+    },
+    cache: "no-store",
+    redirect: "manual"
+  };
+}
+
+function bucketRequest(config) {
+  return {
+    url: new URL(`${STORAGE_API_PATH}/bucket/${encodeURIComponent(config.bucket)}`, config.origin),
+    init: requestInit(config)
+  };
+}
+
+function objectRequest(config, operation, objectKey) {
   const path = encodeObjectKey(objectKey);
   if (!path) throw new Error("invalid_storage_object_key");
-
-  const url = new URL(`${STORAGE_API_PATH}/${operation}/${encodeURIComponent(bucket)}/${path}`, projectUrl.origin);
-  return {
-    url,
-    init: {
-      method: "GET",
-      headers: {
-        // Supabase secret API keys belong in apikey. Do not also send this
-        // opaque key as a Bearer JWT in Authorization.
-        apikey: env.SUPABASE_SECRET_KEY,
-        Accept: "application/json"
-      },
-      cache: "no-store",
-      redirect: "manual"
-    }
-  };
+  const url = new URL(
+    `${STORAGE_API_PATH}/object/${operation}/${encodeURIComponent(config.bucket)}/${path}`,
+    config.origin
+  );
+  return { url, init: requestInit(config, operation === "info" ? "application/json" : "*/*") };
 }
 
 function encodeObjectKey(value) {
@@ -61,9 +72,20 @@ function encodeObjectKey(value) {
   return segments.map(encodeURIComponent).join("/");
 }
 
+/** Confirm the configured bucket still exists and is explicitly non-public. */
+async function privateBucketConfirmed(config, fetchImpl) {
+  const request = bucketRequest(config);
+  const response = await fetchImpl(request.url, request.init);
+  if (!response.ok) return false;
+  const bucket = await response.json().catch(() => null);
+  return bucket?.id === config.bucket && bucket?.public === false;
+}
+
 /** Check object metadata without creating or returning a URL usable by a buyer. */
 export async function hasPrivateObject(env, objectKey, fetchImpl = fetch) {
-  const request = storageRequest(env, "info", objectKey);
+  const config = storageConfig(env);
+  const request = objectRequest(config, "info", objectKey);
+  if (!await privateBucketConfirmed(config, fetchImpl)) return false;
   const response = await fetchImpl(request.url, request.init);
   if (response.status === 404) return false;
   return response.ok;
@@ -71,7 +93,9 @@ export async function hasPrivateObject(env, objectKey, fetchImpl = fetch) {
 
 /** Stream a private object through the Worker; never return a Supabase URL. */
 export async function getPrivateObject(env, objectKey, fetchImpl = fetch) {
-  const request = storageRequest(env, "authenticated", objectKey);
+  const config = storageConfig(env);
+  const request = objectRequest(config, "authenticated", objectKey);
+  if (!await privateBucketConfirmed(config, fetchImpl)) throw new Error("supabase_bucket_not_private");
   const response = await fetchImpl(request.url, request.init);
   if (response.status === 404) return null;
   if (!response.ok || !response.body) throw new Error("supabase_storage_unavailable");
@@ -83,3 +107,4 @@ export async function getPrivateObject(env, objectKey, fetchImpl = fetch) {
     size: Number.isSafeInteger(length) && length >= 0 ? length : null
   };
 }
+
