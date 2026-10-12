@@ -1,0 +1,10 @@
+# Private guide artifacts and local credentials must never enter GitHub Pages.
+backend/private-assets/**
+backend/.dev.vars
+backend/.dev.vars.*
+!backend/.dev.vars.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+backend/node_modules/
+backend/.wrangler/

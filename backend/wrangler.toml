@@ -1,0 +1,24 @@
+name = "puerto-plata-guide-api"
+main = "src/index.js"
+compatibility_date = "2026-10-10"
+workers_dev = true
+
+# Supabase Storage is accessed by the Worker using server-side environment
+# variables. Keep the bucket private; never add a public URL binding.
+# Keep separate test and production resources. Production deployment is not
+# implemented or enabled by this prototype; the Worker rejects non-test mode.
+[[d1_databases]]
+binding = "DB"
+database_name = "puerto-plata-guide-test"
+database_id = "c02ba1d3-bcc5-480a-ab76-4ef845ff11a5"
+migrations_dir = "migrations"
+
+[vars]
+APP_ENV = "test"
+PAYMENTS_ENABLED = "false"
+SUPABASE_URL = "https://mnuhtccwhquhdkgecdao.supabase.co"
+SUPABASE_STORAGE_BUCKET = "puerto-plata-guide-private-test"
+SITE_ORIGIN = "https://socrateodiaz-coder.github.io/puerto-plata-walking-guide"
+ALLOWED_ORIGINS = "https://socrateodiaz-coder.github.io"
+PAYPAL_API_BASE = "https://api-m.sandbox.paypal.com"
+

@@ -1,0 +1,13 @@
+{
+  "name": "puerto-plata-guide-backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/worker.test.js",
+    "dev": "wrangler dev --local",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.30.0"
+  }
+}

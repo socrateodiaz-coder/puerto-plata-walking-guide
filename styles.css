@@ -269,6 +269,20 @@ h1 em { color: var(--sea); font-weight: 500; }
 .state-card h1 { font-size: clamp(36px, 9vw, 50px); }
 .state-copy { margin-bottom: 18px; color: var(--ink-soft); font-size: 15px; line-height: 1.7; }
 .state-actions { display: grid; gap: 10px; }
+[hidden] { display: none !important; }
+.checkout-status-success { color: #285b4c; background: #eaf4ed; border-color: #cfe4d5; }
+.checkout-status-success strong { color: #1e493d; }
+.checkout-status-error, .status-error { color: #8a3d35; }
+.checkout-status-error { background: #fbefec; border-color: #ebd0c8; }
+.checkout-status-error strong { color: #76362f; }
+.status-success { color: #285b4c; }
+.status-pending { color: #714c2e; }
+.provider-options { display: grid; gap: 11px; margin-block: 14px; }
+.test-mode-note { margin: 0; color: #714c2e; font-size: 11px; font-weight: 700; letter-spacing: .07em; }
+.paypal-button-wrap { min-height: 46px; }
+.checkout-footnote { font-size: 12px; line-height: 1.55; }
+#download-guide-button { margin-block: 10px 18px; }
+#receipt-actions { margin-top: 15px; }
 
 .footer { padding-block: 19px 24px; border-top: 1px solid var(--line); }
 .footer-inner { display: grid; gap: 6px; }
