@@ -314,7 +314,7 @@
         return;
       }
       if (!config.checkoutEnabled) {
-        setCheckoutStatus("Sandbox setup required", "The backend is disabled until test credentials, a signed webhook, and secure token encryption are configured.");
+        setCheckoutStatus("Sandbox checkout is disabled", "Purchases are unavailable until the backend is enabled and all test settings are ready. No payment has been processed.");
         return;
       }
       providers.hidden = false;

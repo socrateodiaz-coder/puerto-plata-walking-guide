@@ -19,6 +19,40 @@ const baseOrder = {
 const finalPdf = { final_pdf_key: "private/guide.pdf", artifact_kind: "final" };
 const DOWNLOAD_TOKEN = "d".repeat(64);
 
+test("Stripe Checkout uses the current card-only allowed payment method filter", async () => {
+  const receiptToken = "c".repeat(64);
+  const order = { id: "checkout-unit-order", status: "pending", receipt_token_hash: await hashToken(receiptToken), amount_minor: 999, currency: "usd" };
+  let persisted = false;
+  const env = {
+    APP_ENV: "test", PAYMENTS_ENABLED: "true", SITE_ORIGIN: "http://127.0.0.1:8000",
+    STRIPE_SECRET_KEY: "sk_test_unit_only", STRIPE_WEBHOOK_SECRET: "whsec_unit_only",
+    TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
+    DB: { prepare(sql) { return {
+      bind() { return this; },
+      async first() {
+        if (sql.startsWith("SELECT * FROM product_config")) return { price_minor: 999, currency: "usd", name: "TEST ONLY Guide" };
+        if (sql.startsWith("SELECT * FROM orders WHERE provider = ? AND client_request_id = ?")) return order;
+        throw new Error("Unexpected checkout SQL");
+      },
+      async run() { assert.ok(sql.startsWith("UPDATE orders SET provider_checkout_id")); persisted = true; }
+    }; } }
+  };
+  await withFetch(async (url, init) => {
+    assert.equal(url, "https://api.stripe.com/v1/checkout/sessions");
+    const form = new URLSearchParams(init.body);
+    assert.equal(form.get("allowed_payment_method_types[0]"), "card");
+    assert.equal(form.has("payment_method_types[0]"), false);
+    assert.equal(form.get("line_items[0][price_data][unit_amount]"), "999");
+    assert.equal(form.get("metadata[order_id]"), order.id);
+    return Response.json({ id: "cs_test_unit_only", livemode: false, url: "https://checkout.stripe.com/c/pay/cs_test_unit_only" });
+  }, async () => {
+    const response = await worker.fetch(new Request("http://worker.local/api/stripe/checkout", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ receiptToken, requestId: "12345678-1234-1234-1234-123456789abc" }) }), env);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).checkoutUrl, "https://checkout.stripe.com/c/pay/cs_test_unit_only");
+    assert.equal(persisted, true);
+  });
+});
+
 async function hashToken(value) {
   const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -116,6 +150,76 @@ async function signedStripeWebhook(event, secret) {
     body
   });
 }
+
+async function makeWebhookState() {
+  const receiptToken = "e".repeat(64);
+  const state = {
+    receiptToken, events: new Set(), paidTransitions: 0,
+    order: { id: "webhook-order", provider: "stripe", provider_checkout_id: "cs_test_webhook", status: "pending", amount_minor: 999, currency: "usd", receipt_token_hash: await hashToken(receiptToken), download_limit: 3, download_ttl_seconds: 86400, download_count: 0, revoked_at: null },
+    product: { id: "pp-walking-guide-v1", final_pdf_key: "tests/placeholder.pdf", artifact_kind: "test-placeholder" }
+  };
+  const DB = {
+    prepare(sql) { return {
+      sql, values: [], bind(...values) { this.values = values; return this; },
+      async first() {
+        if (sql.startsWith("SELECT * FROM product_config")) return { ...state.product };
+        if (sql.startsWith("SELECT * FROM orders WHERE receipt_token_hash")) return this.values[0] === state.order.receipt_token_hash ? { ...state.order } : null;
+        if (sql.startsWith("SELECT * FROM orders WHERE download_token_hash")) return this.values[0] === state.order.download_token_hash ? { ...state.order } : null;
+        if (sql.startsWith("SELECT * FROM orders WHERE id = ?")) return this.values[0] === state.order.id ? { ...state.order } : null;
+        throw new Error("Unexpected webhook test SQL");
+      }
+    }; },
+    async batch(statements) { return statements.map(statement => {
+      const { sql, values } = statement;
+      let changes = 0;
+      if (sql.startsWith("INSERT INTO payment_events")) { if (!state.events.has(values[1])) { state.events.add(values[1]); changes = 1; } }
+      else if (sql.startsWith("UPDATE orders SET status = 'paid'")) {
+        if (values[6] === state.order.id && state.order.status === "pending") {
+          Object.assign(state.order, { status: "paid", provider_payment_id: values[0], paid_at: values[1], download_expires_at: values[2], download_token_hash: values[3], download_token_cipher: values[4] }); state.paidTransitions++; changes = 1;
+        }
+      } else if (sql.startsWith("UPDATE orders SET status = ?")) {
+        if (state.order.status === "pending" && values[3] === state.order.provider_checkout_id) { state.order.status = values[0]; changes = 1; }
+      } else throw new Error("Unexpected webhook batch SQL");
+      return { meta: { changes } };
+    }); }
+  };
+  return { state, env: { DB, APP_ENV: "test", PAYMENTS_ENABLED: "false", STRIPE_WEBHOOK_SECRET: "whsec_unit_test_only", TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 8).toString("base64") } };
+}
+
+function completedEvent() { return { id: "evt_test_completed", type: "checkout.session.completed", livemode: false, data: { object: { id: "cs_test_webhook", livemode: false, metadata: { order_id: "webhook-order" }, client_reference_id: "webhook-order", mode: "payment", payment_status: "paid", amount_total: 999, currency: "usd", payment_intent: "pi_test_verified" } } }; }
+
+test("duplicate signed Stripe completions preserve one purchase, token, expiry, and download count", async () => {
+  const { state, env } = await makeWebhookState();
+  assert.equal((await worker.fetch(await signedStripeWebhook(completedEvent(), env.STRIPE_WEBHOOK_SECRET), env)).status, 200);
+  const issued = { ...state.order };
+  state.order.download_count = 1;
+  for (let i = 0; i < 2; i++) assert.equal((await worker.fetch(await signedStripeWebhook(completedEvent(), env.STRIPE_WEBHOOK_SECRET), env)).status, 200);
+  assert.equal(state.paidTransitions, 1);
+  assert.equal(state.events.size, 1);
+  assert.equal(state.order.download_token_hash, issued.download_token_hash);
+  assert.equal(state.order.download_token_cipher, issued.download_token_cipher);
+  assert.equal(state.order.download_expires_at, issued.download_expires_at);
+  assert.equal(state.order.download_count, 1);
+});
+
+test("signed cancelled and failed Stripe events never expose download access or resurrect a purchase", async () => {
+  for (const [type, status] of [["checkout.session.expired", "cancelled"], ["checkout.session.async_payment_failed", "failed"]]) {
+    const { state, env } = await makeWebhookState();
+    const event = { id: "evt_test_failure", type, livemode: false, data: { object: { id: state.order.provider_checkout_id, livemode: false } } };
+    assert.equal((await worker.fetch(await signedStripeWebhook(event, env.STRIPE_WEBHOOK_SECRET), env)).status, 200);
+    assert.equal(state.order.status, status);
+    const receipt = await worker.fetch(new Request("https://worker.example/api/orders/receipt", { method: "POST", body: JSON.stringify({ receiptToken: state.receiptToken }) }), env);
+    const body = await receipt.json();
+    assert.equal(body.paid, false);
+    assert.equal(body.downloadToken, undefined);
+    const download = await worker.fetch(new Request("https://worker.example/api/download", { method: "POST", body: JSON.stringify({ downloadToken: "f".repeat(64) }) }), env);
+    assert.equal(download.status, 404);
+    await worker.fetch(await signedStripeWebhook(completedEvent(), env.STRIPE_WEBHOOK_SECRET), env);
+    assert.equal(state.order.status, status);
+    assert.equal(state.paidTransitions, 0);
+    assert.equal(state.order.download_token_hash, undefined);
+  }
+});
 
 test("formats configured amounts using provider minor units", () => {
   assert.equal(currencyScale("USD"), 2);
@@ -361,4 +465,3 @@ test("storage access refuses a Supabase publishable key", async () => {
   assert.equal((await response.json()).error, "missing_file");
   assert.equal(state.order.download_count, 0);
 });
-

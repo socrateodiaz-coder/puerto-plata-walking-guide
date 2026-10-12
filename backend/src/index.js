@@ -163,7 +163,7 @@ async function stripeCheckout(request, env) {
   form.set("cancel_url", `${site}/?page=checkout&status=cancelled`);
   form.set("client_reference_id", order.id);
   form.set("metadata[order_id]", order.id);
-  form.set("payment_method_types[0]", "card");
+  form.set("allowed_payment_method_types[0]", "card");
   form.set("line_items[0][quantity]", "1");
   form.set("line_items[0][price_data][currency]", order.currency.toLowerCase());
   form.set("line_items[0][price_data][unit_amount]", String(order.amount_minor));
